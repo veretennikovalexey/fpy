@@ -16,10 +16,12 @@ src_conn_str = (
 )
 
 # Назначение: таблица R09 в словаре C:\fabius\ohc\REFLIS\DICT.ADD
+# ServerTypes=2 — ALS (Advantage Local Server), встроенный в ODBC-драйвер.
+# Не требует установленного ADS server: только adsodbc.exe на машине.
 dst_conn_str = (
     "Driver={Advantage StreamlineSQL ODBC};"
     "DataDirectory=C:\\fabius\\ohc\\REFLIS\\DICT.ADD;"
-    "ServerTypes=3;"
+    "ServerTypes=2;"
     "UID=AdsSys;"
     "PWD=;"
 )
