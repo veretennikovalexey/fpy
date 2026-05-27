@@ -54,6 +54,13 @@ In this project there is NO ADS service running on the user's machine or on any 
 
 SQL dialect supports `SELECT TOP N * FROM <table>` — the table name matches the file basename (e.g. `R09.adt` → `FROM R09`).
 
+### autocommit and transactions
+
+`pyodbc.connect(...)` by default tries to call `SQLSetConnectAttr(SQL_ATTR_AUTOCOMMIT, OFF)` so it can manage transactions itself.
+
+- **Free-table mode** (`TableType=ADT`, no dictionary) does NOT support transactions. The driver responds with `Error 2110 'Driver not capable' (SQLSetConnectAttr)` and the `pyodbc.connect()` call fails before any SQL runs. Always open free-table connections with `pyodbc.connect(CONN_STR, autocommit=True)` — note that `autocommit` is a keyword argument to `pyodbc.connect()`, NOT part of the connection string.
+- **Dictionary mode** does support transactions, but the safe pattern is still `autocommit=True` at the pyodbc level plus explicit SQL transaction commands: `BEGIN TRANSACTION` / `COMMIT WORK` / `ROLLBACK WORK`. This avoids any further surprises from the pyodbc/ODBC autocommit dance.
+
 ## Runtime environment
 
 - Real execution happens on the user's **Windows** machine where the Advantage ODBC driver is installed. Inside the Cowork Linux sandbox the driver is not available — only `python3 -m py_compile` for syntax checks is meaningful; do not try to actually run the pyodbc code from the sandbox.
@@ -88,5 +95,6 @@ Files NOT needed for local-only operation (safe to remove if they were copied fr
 - Forgetting `-y` on freeadt → script hangs.
 - Using `ServerTypes=2` (or `3`) when no ADS service is running → `Error 6420 discovery process failed`. Use `ServerTypes=1`.
 - Mis-remembering that `ServerTypes=2` means ALS. It does NOT — 1 is ALS, 2 is remote ADS.
+- Calling `pyodbc.connect(CONN_STR)` on a free table → `Error 2110 'Driver not capable' (SQLSetConnectAttr SQL_ATTR_AUTOCOMMIT)`. Add `autocommit=True` to the `pyodbc.connect()` call.
 - Pointing `DataDirectory` at the `.adt` file instead of the containing folder when in free-table mode.
 - Assuming the Linux sandbox can execute the script — it cannot; only the user's Windows box can.

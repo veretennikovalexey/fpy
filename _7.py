@@ -15,18 +15,15 @@ LIST_FILE = os.path.join(BASE_DIR, "_7.txt")
 #   4 = AIS  (Internet)
 # Можно складывать: 3 = ALS+ADS (попробует оба).
 # Нам нужна ТОЛЬКО локальная работа без службы → ServerTypes=1.
-# Ошибка 6420 ("discovery process failed") = драйвер ломился к удалённому
-# сервису. Лечится сменой ServerTypes на 1.
 SRC_CONN_STR = (
     "Driver={Advantage StreamlineSQL ODBC};"
     f"DataDirectory={BASE_DIR};"
-    "ServerTypes=1;"      # 1 = ALS, без словаря, без службы
+    "ServerTypes=1;"
     "TableType=ADT;"
     "UID=AdsSys;"
     "PWD=;"
 )
 
-# Приёмник: словарь, но всё ещё через ALS — никакой службы не требуется.
 DST_CONN_STR = (
     "Driver={Advantage StreamlineSQL ODBC};"
     "DataDirectory=C:\\fabius\\ohc\\REFLIS\\DICT.ADD;"
@@ -37,8 +34,7 @@ DST_CONN_STR = (
 
 
 def read_table_list(path):
-    """Читаем _7.txt: по одному имени справочника на строку.
-    Пустые строки и строки, начинающиеся с '#', игнорируем."""
+    """_7.txt: по одному имени справочника на строку. Пустые и '#' игнорим."""
     names = []
     with open(path, "r", encoding="utf-8-sig") as f:
         for raw in f:
@@ -67,9 +63,18 @@ def free_adt(name):
 
 
 def copy_table(name):
-    """Читаем все строки из локальной свободной N.adt и переносим в словарную N:
-    DELETE FROM N; INSERT ... — всё в одной транзакции на стороне приёмника."""
-    src = pyodbc.connect(SRC_CONN_STR)
+    """Читаем все строки из локальной свободной N.adt и переносим в словарную N.
+
+    Про autocommit:
+      - pyodbc.connect() по умолчанию пробует SQLSetConnectAttr(AUTOCOMMIT=OFF),
+        чтобы рулить транзакциями самостоятельно.
+      - Free-table режим Advantage (без словаря) транзакции НЕ поддерживает →
+        драйвер бросает 2110 "Driver not capable". Поэтому src соединение
+        открываем с autocommit=True (это аргумент pyodbc.connect, не строка).
+      - dst тоже autocommit=True; атомарность DELETE+INSERT эмулируем явной
+        SQL-транзакцией: BEGIN TRANSACTION / COMMIT WORK / ROLLBACK WORK.
+    """
+    src = pyodbc.connect(SRC_CONN_STR, autocommit=True)
     try:
         src_cur = src.cursor()
         src_cur.execute(f"SELECT * FROM {name}")
@@ -85,26 +90,35 @@ def copy_table(name):
     placeholders = ", ".join("?" for _ in columns)
     insert_sql   = f'INSERT INTO {name} ({col_list}) VALUES ({placeholders})'
 
-    dst = pyodbc.connect(DST_CONN_STR)
-    dst.autocommit = False
+    dst = pyodbc.connect(DST_CONN_STR, autocommit=True)
     try:
         dst_cur = dst.cursor()
-        dst_cur.execute(f"DELETE FROM {name}")
-        deleted = dst_cur.rowcount
-        print(f"  DELETE FROM {name}: затронуто {deleted}")
+        in_tx = False
+        try:
+            dst_cur.execute("BEGIN TRANSACTION")
+            in_tx = True
 
-        if rows:
-            dst_cur.executemany(insert_sql, rows)
-            print(f"  INSERT INTO {name}: вставлено {len(rows)}")
-        else:
-            print(f"  источник пуст, INSERT пропущен")
+            dst_cur.execute(f"DELETE FROM {name}")
+            deleted = dst_cur.rowcount
+            print(f"  DELETE FROM {name}: затронуто {deleted}")
 
-        dst.commit()
-        print(f"  commit OK")
-    except Exception:
-        dst.rollback()
-        print(f"  rollback (ошибка при переносе)", file=sys.stderr)
-        raise
+            if rows:
+                dst_cur.executemany(insert_sql, rows)
+                print(f"  INSERT INTO {name}: вставлено {len(rows)}")
+            else:
+                print(f"  источник пуст, INSERT пропущен")
+
+            dst_cur.execute("COMMIT WORK")
+            in_tx = False
+            print(f"  commit OK")
+        except Exception:
+            if in_tx:
+                try:
+                    dst_cur.execute("ROLLBACK WORK")
+                    print(f"  rollback (ошибка при переносе)", file=sys.stderr)
+                except Exception as rb_err:
+                    print(f"  rollback тоже упал: {rb_err}", file=sys.stderr)
+            raise
     finally:
         dst.close()
 
