@@ -6,8 +6,9 @@ This folder is a Python sandbox for working with **Advantage Database Server (AD
 
 - `freeadt.exe` — Advantage utility that detaches an `.adt` table from its Data Dictionary, turning it into a free table that can be opened without the dictionary.
 - `R09.adt` / `R09.ADI` — the table file and its index file.
-- `_4.py` — reference example: connects to the table **through a dictionary** (`DICT.ADD`) using `ServerTypes=3` (remote/AIS) and the `AdsSys` user with an empty password.
-- `_5.py` — current working script: runs `freeadt.exe -y R09.adt`, then connects to the **free table** (no dictionary) and reads rows.
+- `_4.py` — reference example: connects to the table **through a dictionary** (`DICT.ADD`) as the `AdsSys` user with an empty password. NOTE: it has `ServerTypes=3` which means "try ALS, then ADS"; that only worked because the ADS service used to be running. For the current deployment (no ADS service anywhere), use `ServerTypes=1`.
+- `_5.py` — early working script: runs `freeadt.exe -y R09.adt`, then connects to the **free table** (no dictionary) and reads rows. Same caveat about `ServerTypes` (see below).
+- `_7.py` — batch script: reads table names from `_7.txt`, runs `freeadt` on each, then copies rows from the local free `.adt` into the dictionary-bound table. Uses `ServerTypes=1` (ALS, no service) on both ends.
 
 All work happens on Windows at `C:\Users\raide\Desktop\fpy\`. The scripts assume their own folder contains both the executable and the data files.
 
@@ -25,16 +26,29 @@ Note: freeadt makes no backup and the table loses its extended attributes from t
 
 ## pyodbc connection patterns
 
-Driver name in the connection string is `{Advantage StreamlineSQL ODBC}`. Two modes matter:
+Driver name in the connection string is `{Advantage StreamlineSQL ODBC}`.
 
-**Through a dictionary** (as in `_4.py`):
+### ServerTypes — bitmask (very important)
+
+Confirmed against the official Advantage docs and connectionstrings.com:
+
+- `ServerTypes=1` → **ALS** (Advantage Local Server) — fully in-process, NO Windows service required, NO network traffic. Uses `ADSLOC32.DLL`.
+- `ServerTypes=2` → **ADS** (Remote Database Server) — REQUIRES the Advantage Database Server Windows service running on the host machine. If the service is stopped, the driver fails with `Error 6420: 'discovery' process for the Advantage Database Server failed`.
+- `ServerTypes=4` → **AIS** (Internet, Advantage Internet Server).
+- Values can be ORed: `ServerTypes=3` (= 1+2) means "try ALS first, fall back to ADS".
+
+In this project there is NO ADS service running on the user's machine or on any of the ~20 bakeries → **always use `ServerTypes=1`**. Earlier scripts (`_4.py`, `_5.py`) had `ServerTypes=2`/`3` documented as "ALS"; that was wrong, they only worked because the service used to be up.
+
+### Two modes that matter
+
+**Through a dictionary**:
 - `DataDirectory` points at the `.ADD` dictionary file (e.g. `C:\fabius\ohc\REFLIS\DICT.ADD`).
-- `ServerTypes=3` (remote/AIS).
+- `ServerTypes=1` (ALS — no service required).
 - `UID=AdsSys`, `PWD=` (empty).
 
-**Free table, no dictionary** (as in `_5.py`, after `freeadt`):
+**Free table, no dictionary** (after `freeadt`):
 - `DataDirectory` points at the **folder** containing the `.adt` files.
-- `ServerTypes=2` (Advantage Local Server / ALS).
+- `ServerTypes=1` (ALS).
 - `TableType=ADT`.
 - `UID=AdsSys`, `PWD=` (empty).
 
@@ -53,9 +67,26 @@ SQL dialect supports `SELECT TOP N * FROM <table>` — the table name matches th
 - They are in Russia.
 - When asked to run freeadt repeatedly, run it every time and ignore "already free" feedback — don't try to be clever about skipping it.
 
+## Required DLLs for ALS-only mode
+
+The pyodbc scripts here talk to ADS through the Windows-registered ODBC driver `{Advantage StreamlineSQL ODBC}`. The driver itself ships with its own copy of the runtime DLLs, but for completeness, the minimal set of files for a stand-alone ALS application is:
+
+- `ACE32.DLL` — Advantage Client Engine (core).
+- `ADSLOC32.DLL` — Advantage Local Server engine. Required for `ServerTypes=1`.
+- `AICU32.DLL` — ICU/Unicode support.
+- Supporting data files when used: `adscollate.adm`, `adscollate.adt`, `ansi.chr`, `extend.chr`, `icudt40l.dat`, `adslocal.cfg`.
+
+Files NOT needed for local-only operation (safe to remove if they were copied from the Fabius project):
+
+- `AXCWS32.DLL` — AIS web-service client (only needed for `ServerTypes=4`).
+- `libeay32.dll`, `ssleay32.dll` — OpenSSL, needed only for AIS/HTTPS.
+- `midasx.dll` — Borland MIDAS / DataSnap, unrelated to ADS.
+- `Quricol.Barcode.dll`, `quricol32.dll`, `quricol64.dll`, `dmtx.dll` — barcode libraries from the host app, unrelated to ADS.
+
 ## Common pitfalls
 
 - Forgetting `-y` on freeadt → script hangs.
-- Using `ServerTypes=3` after freeing the table → driver still expects a dictionary; switch to `ServerTypes=2` + `TableType=ADT`.
+- Using `ServerTypes=2` (or `3`) when no ADS service is running → `Error 6420 discovery process failed`. Use `ServerTypes=1`.
+- Mis-remembering that `ServerTypes=2` means ALS. It does NOT — 1 is ALS, 2 is remote ADS.
 - Pointing `DataDirectory` at the `.adt` file instead of the containing folder when in free-table mode.
 - Assuming the Linux sandbox can execute the script — it cannot; only the user's Windows box can.

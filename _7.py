@@ -8,22 +8,29 @@ BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
 FREEADT   = os.path.join(BASE_DIR, "freeadt.exe")
 LIST_FILE = os.path.join(BASE_DIR, "_7.txt")
 
-# Connection strings — один раз, переиспользуем
+# Connection strings — один раз, переиспользуем.
+# ServerTypes — это битмаска:
+#   1 = ALS  (Advantage Local Server, локально, без службы ADS)
+#   2 = ADS  (Remote Database Server, требует запущенной службы)
+#   4 = AIS  (Internet)
+# Можно складывать: 3 = ALS+ADS (попробует оба).
+# Нам нужна ТОЛЬКО локальная работа без службы → ServerTypes=1.
+# Ошибка 6420 ("discovery process failed") = драйвер ломился к удалённому
+# сервису. Лечится сменой ServerTypes на 1.
 SRC_CONN_STR = (
     "Driver={Advantage StreamlineSQL ODBC};"
     f"DataDirectory={BASE_DIR};"
-    "ServerTypes=2;"      # 2 = ALS, без словаря
+    "ServerTypes=1;"      # 1 = ALS, без словаря, без службы
     "TableType=ADT;"
     "UID=AdsSys;"
     "PWD=;"
 )
 
-# ServerTypes=2 — ALS (Advantage Local Server), встроенный в ODBC-драйвер.
-# Не требует установленного ADS server: только adsodbc.exe на машине.
+# Приёмник: словарь, но всё ещё через ALS — никакой службы не требуется.
 DST_CONN_STR = (
     "Driver={Advantage StreamlineSQL ODBC};"
     "DataDirectory=C:\\fabius\\ohc\\REFLIS\\DICT.ADD;"
-    "ServerTypes=2;"
+    "ServerTypes=1;"
     "UID=AdsSys;"
     "PWD=;"
 )
@@ -62,7 +69,6 @@ def free_adt(name):
 def copy_table(name):
     """Читаем все строки из локальной свободной N.adt и переносим в словарную N:
     DELETE FROM N; INSERT ... — всё в одной транзакции на стороне приёмника."""
-    # Источник
     src = pyodbc.connect(SRC_CONN_STR)
     try:
         src_cur = src.cursor()
@@ -79,7 +85,6 @@ def copy_table(name):
     placeholders = ", ".join("?" for _ in columns)
     insert_sql   = f'INSERT INTO {name} ({col_list}) VALUES ({placeholders})'
 
-    # Приёмник — транзакция на одну таблицу
     dst = pyodbc.connect(DST_CONN_STR)
     dst.autocommit = False
     try:
@@ -114,7 +119,7 @@ def main():
         print(f"В {LIST_FILE} нет ни одного имени справочника. Выходим.")
         return
 
-    print(f"К переносу: {len(names)} таблиц(ы) → {names}")
+    print(f"К переносу: {len(names)} таблиц(ы) -> {names}")
     print("-" * 60)
 
     ok, failed = [], []
@@ -124,10 +129,10 @@ def main():
             free_adt(name)
             copy_table(name)
             ok.append(name)
-            print(f"  ✓ {name} перенесён")
+            print(f"  [OK] {name} перенесён")
         except Exception as e:
             failed.append((name, e))
-            print(f"  ✗ {name}: {e}", file=sys.stderr)
+            print(f"  [FAIL] {name}: {e}", file=sys.stderr)
         print("-" * 60)
 
     print(f"ИТОГО: успешно={len(ok)}, с ошибками={len(failed)}")
