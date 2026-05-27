@@ -74,6 +74,28 @@ SQL dialect supports `SELECT TOP N * FROM <table>` — the table name matches th
 - They are in Russia.
 - When asked to run freeadt repeatedly, run it every time and ignore "already free" feedback — don't try to be clever about skipping it.
 
+## Custom collation `RUSSIAN2` (Fabius-specific) — error 5175
+
+Fabius uses a **custom ALS collation called `RUSSIAN2`** (an alternate ANSI collation, baked into a custom `ANSI.CHR`). All `.adt` indexes (`.ADI`) in Fabius tables were built under this collation.
+
+If ALS is started without that collation active, opening any table fails with:
+
+```
+Error 5175: The index file was created with a different collation sequence than is currently being used.
+```
+
+To make ALS pick up `RUSSIAN2`, **the following files must be in either the script's current working directory or `C:\Windows\System32`**:
+
+- `ANSI.CHR` — ANSI character set table with Fabius's RUSSIAN2 sort order.
+- `EXTEND.CHR` — OEM character set table (paired with ANSI.CHR).
+- `adscollate.adt` — the dynamic-collation dictionary that defines `RUSSIAN2`.
+- `adscollate.adm` — memo file for `adscollate.adt`.
+- `adslocal.cfg` — ALS config; tells ALS which ANSI/OEM collation to activate (`ANSI_CHAR_SET=RUSSIAN2`).
+
+All five come from the Fabius client installation (typically next to the application `.exe` or under `C:\fabius\...`). The same set must be present in the dictionary folder used by `DST_CONN_STR` (e.g. `C:\fabius\ohc\REFLIS\`).
+
+No code change is needed in the pyodbc scripts — ALS reads `adslocal.cfg` from the cwd automatically.
+
 ## Required DLLs for ALS-only mode
 
 The pyodbc scripts here talk to ADS through the Windows-registered ODBC driver `{Advantage StreamlineSQL ODBC}`. The driver itself ships with its own copy of the runtime DLLs, but for completeness, the minimal set of files for a stand-alone ALS application is:
@@ -96,5 +118,6 @@ Files NOT needed for local-only operation (safe to remove if they were copied fr
 - Using `ServerTypes=2` (or `3`) when no ADS service is running → `Error 6420 discovery process failed`. Use `ServerTypes=1`.
 - Mis-remembering that `ServerTypes=2` means ALS. It does NOT — 1 is ALS, 2 is remote ADS.
 - Calling `pyodbc.connect(CONN_STR)` on a free table → `Error 2110 'Driver not capable' (SQLSetConnectAttr SQL_ATTR_AUTOCOMMIT)`. Add `autocommit=True` to the `pyodbc.connect()` call.
+- `Error 5175 different collation sequence` → ALS is running without the Fabius `RUSSIAN2` collation. Drop `ANSI.CHR`, `EXTEND.CHR`, `adscollate.adt`, `adscollate.adm`, `adslocal.cfg` from the Fabius install into the script directory and the dictionary directory. See the "Custom collation `RUSSIAN2`" section above.
 - Pointing `DataDirectory` at the `.adt` file instead of the containing folder when in free-table mode.
 - Assuming the Linux sandbox can execute the script — it cannot; only the user's Windows box can.
